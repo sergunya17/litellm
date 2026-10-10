@@ -39327,6 +39327,11 @@ export interface components {
                 [key: string]: unknown;
             };
             /**
+             * Forward Headers
+             * @description Whether caller headers are forwarded to this endpoint. If unset, uses the existing forwarding default.
+             */
+            forward_headers?: boolean | null;
+            /**
              * Guardrails
              * @description Guardrails configuration for this passthrough endpoint. Dict keys are guardrail names, values are optional settings for field targeting. When set, all org/team/key level guardrails will also execute. Defaults to None (no guardrails execute).
              */
