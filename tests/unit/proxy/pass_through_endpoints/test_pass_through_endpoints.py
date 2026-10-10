@@ -10,6 +10,7 @@ from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
+from pathlib import Path
 from types import MappingProxyType, ModuleType, SimpleNamespace
 from typing import Final, Optional
 from unittest.mock import AsyncMock, MagicMock, patch
@@ -8201,6 +8202,71 @@ async def _send_through_proxy(
         cleanup()
         await fake_client.aclose()
     return response, upstream_requests
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("include_subpath", [False, True])
+@pytest.mark.parametrize("forward_headers", [False, True])
+@pytest.mark.parametrize("update", [False, True])
+async def test_saved_header_forwarding_controls_the_live_pass_through_route(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    include_subpath: bool,
+    forward_headers: bool,
+    update: bool,
+) -> None:
+    from litellm.proxy import proxy_server
+    from litellm.proxy._types import PassThroughGenericEndpoint
+    from litellm.proxy.pass_through_endpoints.pass_through_endpoints import (
+        create_pass_through_endpoints,
+        update_pass_through_endpoints,
+    )
+
+    proxy: Final = await _boot_db_backed_proxy(tmp_path, monkeypatch, [], [])
+    request: Final = Request({"type": "http", "app": proxy_server.app})
+    admin: Final = UserAPIKeyAuth(user_role="proxy_admin")
+    endpoint: Final = PassThroughGenericEndpoint.model_validate(
+        {
+            "path": "/saved-forwarding",
+            "target": "http://upstream.test/api",
+            "auth": False,
+            "include_subpath": include_subpath,
+            "forward_headers": not forward_headers if update else forward_headers,
+        }
+    )
+    created: Final = await create_pass_through_endpoints(endpoint, request, admin)
+    endpoint_id: Final = created.endpoints[0].id
+    assert endpoint_id is not None
+    if update:
+        await update_pass_through_endpoints(
+            endpoint_id,
+            PassThroughGenericEndpoint.model_validate(
+                {
+                    "path": endpoint.path,
+                    "target": endpoint.target,
+                    "forward_headers": forward_headers,
+                }
+            ),
+            request,
+            admin,
+        )
+
+    path: Final = "/saved-forwarding/item" if include_subpath else "/saved-forwarding"
+    response, upstream_requests = await _send_through_proxy(path, {"x-caller-marker": "retained"})
+
+    assert response.status_code == 200, response.text
+    assert tuple(r.headers.get("x-caller-marker") for r in upstream_requests) == (
+        "retained" if forward_headers else None,
+    )
+    assert proxy.config_table.rows["general_settings"]["pass_through_endpoints"][0]["forward_headers"] == forward_headers
+
+    await _run_db_sync_cycle(proxy)
+    reloaded, reloaded_requests = await _send_through_proxy(path, {"x-caller-marker": "retained"})
+
+    assert reloaded.status_code == 200, reloaded.text
+    assert tuple(r.headers.get("x-caller-marker") for r in reloaded_requests) == (
+        "retained" if forward_headers else None,
+    )
 
 
 @pytest.mark.asyncio

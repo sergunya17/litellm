@@ -2561,6 +2561,10 @@ class PassThroughGenericEndpoint(LiteLLMPydanticObjectBase):
         default=False,
         description="If True, requests to subpaths of the path will be forwarded to the target endpoint. For example, if the path is /bria and include_subpath is True, requests to /bria/v1/text-to-image/base/2.3 will be forwarded to the target endpoint.",
     )
+    forward_headers: bool | None = Field(
+        default=None,
+        description="Whether caller headers are forwarded to this endpoint. If unset, uses the existing forwarding default.",
+    )
     cost_per_request: float = Field(
         default=0.0,
         description="The USD cost per request to the target endpoint. This is used to calculate the cost of the request to the target endpoint.",
