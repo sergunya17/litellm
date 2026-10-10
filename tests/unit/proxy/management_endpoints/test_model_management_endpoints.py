@@ -40,6 +40,43 @@ from litellm.router import Router
 from litellm.types.router import Deployment, LiteLLM_Params, ModelInfo, updateDeployment, updateLiteLLMParams
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "configured",
+    [
+        {},
+        {"use_in_pass_through": True, "merge_reasoning_content_in_choices": False},
+        {"use_in_pass_through": False, "provider_option": "configured"},
+    ],
+)
+async def test_new_model_stores_only_supplied_params_after_encryption(
+    monkeypatch: pytest.MonkeyPatch, configured: Mapping[str, object]
+) -> None:
+    from litellm.proxy.common_utils.encrypt_decrypt_utils import decrypt_value_helper
+    from litellm.proxy.management_endpoints.model_management_endpoints import add_model_to_db
+
+    monkeypatch.setenv("LITELLM_SALT_KEY", "sk-test-storage-salt")
+    supplied: Final = {"model": "openai/embedding-test", "api_key": "sk-test-provider", **configured}
+    row: Final = await add_model_to_db(
+        model_params=Deployment(
+            model_name="stored-embedding",
+            litellm_params=LiteLLM_Params.model_validate(supplied),
+            model_info=ModelInfo(id="stored-embedding-id"),
+        ),
+        user_api_key_dict=UserAPIKeyAuth(user_id="test-admin"),
+        prisma_client=MagicMock(),
+        should_create_model_in_db=False,
+    )
+
+    assert isinstance(row, LiteLLM_ProxyModelTable)
+    restored: Final = {
+        key: decrypt_value_helper(value, key=key) if isinstance(value, str) else value
+        for key, value in row.litellm_params.items()
+    }
+    assert restored == supplied
+    assert row.litellm_params["api_key"] != supplied["api_key"]
+
+
 async def _passthrough_row(update_data):
     return update_data
 
