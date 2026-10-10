@@ -15,6 +15,7 @@ In each method it will call the appropriate method from caching.py
 """
 
 import asyncio
+import builtins
 import datetime
 import inspect
 import time
@@ -27,7 +28,7 @@ import litellm
 from litellm._internal_context import post_response_phase
 from litellm._logging import print_verbose, verbose_logger
 from litellm.caching import InMemoryCache
-from litellm.caching.caching import S3Cache, response_cache_phase
+from litellm.caching.caching import S3Cache, embedding_item_as_mapping, response_cache_phase
 from litellm.constants import CACHE_WRITE_SHUTDOWN_FLUSH_TIMEOUT_SECONDS, RESPONSE_CACHE_EXCLUDED_PROVIDERS
 from litellm.litellm_core_utils.hidden_params import get_hidden_params
 from litellm.litellm_core_utils.llm_response_utils.response_metadata import (
@@ -72,6 +73,11 @@ from litellm.litellm_core_utils.core_helpers import (
 from litellm.litellm_core_utils.streaming_handler import CustomStreamWrapper
 
 EmbeddingCacheInputElement = str | list[int] | ChatCompletionFileObject
+
+
+def _fresh_embedding_row(item: object, position: int) -> Embedding:
+    fields: Final = embedding_item_as_mapping(item)
+    return Embedding.model_validate({**fields, "index": position, "object": "embedding"})
 
 
 class CachingHandlerResponse(LiteLLMBaseModel):
@@ -246,6 +252,7 @@ class _CachedEmbeddingRecord(LiteLLMBaseModel):
     prompt_tokens: int | None
     prompt_tokens_details: dict | None
     format_version: int
+    provider_specific_fields: Mapping[str, builtins.object] | None = None
 
 
 def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
@@ -263,6 +270,7 @@ def _current_format_embedding_entry(entry: object) -> CachedEmbedding | None:
         "prompt_tokens": record.prompt_tokens,
         "prompt_tokens_details": record.prompt_tokens_details,
         "format_version": record.format_version,
+        "provider_specific_fields": record.provider_specific_fields,
     }
     return cached
 
@@ -616,10 +624,13 @@ class LLMCachingHandler:
                 if cr is not None:
                     embedding_data = cr.get("embedding")
                     if embedding_data is not None:
-                        final_embedding_cached_response.data[idx] = Embedding(
-                            embedding=embedding_data,
-                            index=idx,
-                            object="embedding",
+                        final_embedding_cached_response.data[idx] = Embedding.model_validate(
+                            {
+                                **(cr.get("provider_specific_fields") or {}),
+                                "embedding": embedding_data,
+                                "index": idx,
+                                "object": "embedding",
+                            }
                         )
                     cached_prompt_tokens = cr.get("prompt_tokens")
                     if cached_prompt_tokens is not None:
@@ -786,9 +797,7 @@ class LLMCachingHandler:
         merged: Final = EmbeddingResponse(
             model=cached.model,
             data=[
-                item
-                if item is not None
-                else Embedding(embedding=next(fresh_items)["embedding"], index=position, object="embedding")
+                item if item is not None else _fresh_embedding_row(next(fresh_items), position)
                 for position, item in enumerate(cached.data)
             ],
             usage=merged_usage,

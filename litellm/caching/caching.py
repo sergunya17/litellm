@@ -13,12 +13,12 @@ import json
 import logging
 import time
 import traceback
-from collections.abc import Generator, Mapping
+from collections.abc import Generator, Mapping, Sequence
 from contextlib import contextmanager
 from enum import Enum
-from typing import Any, Final, Literal, cast
+from typing import Final, Literal, cast
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, RootModel
 
 import litellm
 from litellm._internal_context import current_service_target, service_target
@@ -68,6 +68,22 @@ def print_verbose(print_statement):
 class CacheMode(str, Enum):
     default_on = "default_on"
     default_off = "default_off"
+
+
+class _EmbeddingItem(BaseModel):
+    model_config = ConfigDict(extra="allow", frozen=True)
+
+    embedding: Sequence[float] | str | None = None
+    index: int | None = None
+    object: str | None = None
+
+
+def embedding_item_as_mapping(embedding_response: object) -> Mapping[str, object]:
+    if isinstance(embedding_response, BaseModel):
+        return RootModel[Mapping[str, object]].model_validate(embedding_response.model_dump()).root
+    if isinstance(embedding_response, Mapping):
+        return RootModel[Mapping[str, object]].model_validate(embedding_response).root
+    return RootModel[Mapping[str, object]].model_validate(vars(embedding_response)).root
 
 
 #### LiteLLM.Completion / Embedding Cache ####
@@ -774,7 +790,7 @@ class Cache:
 
     def _convert_to_cached_embedding(
         self,
-        embedding_response: Any,
+        embedding_response: object,
         model: str | None,
         prompt_tokens: int | None = None,
         prompt_tokens_details: dict | None = None,
@@ -782,26 +798,17 @@ class Cache:
         """
         Convert any embedding response into the standardized CachedEmbedding TypedDict format.
         """
-        try:
-            data: Final = (
-                embedding_response
-                if isinstance(embedding_response, dict)
-                else embedding_response.model_dump()
-                if hasattr(embedding_response, "model_dump")
-                else vars(embedding_response)
-            )
-            cached: Final[CachedEmbedding] = {
-                "embedding": data.get("embedding"),
-                "index": data.get("index"),
-                "object": data.get("object"),
-                "model": model,
-                "prompt_tokens": prompt_tokens,
-                "prompt_tokens_details": prompt_tokens_details,
-                "format_version": EMBEDDING_CACHE_FORMAT_VERSION,
-            }
-            return cached
-        except KeyError as e:
-            raise ValueError(f"Missing expected key in embedding response: {e}")
+        item: Final = _EmbeddingItem.model_validate(embedding_item_as_mapping(embedding_response))
+        return {
+            "embedding": item.embedding,
+            "index": item.index,
+            "object": item.object,
+            "model": model,
+            "prompt_tokens": prompt_tokens,
+            "prompt_tokens_details": prompt_tokens_details,
+            "format_version": EMBEDDING_CACHE_FORMAT_VERSION,
+            "provider_specific_fields": item.model_extra or None,
+        }
 
     def _get_per_item_prompt_tokens_details(
         self,

@@ -1,8 +1,9 @@
-from collections.abc import Sequence
+import builtins
+from collections.abc import Mapping, Sequence
 from enum import Enum
 from typing import Any, Final, Literal, Optional, Union
 
-from typing_extensions import ReadOnly, TypedDict
+from typing_extensions import NotRequired, ReadOnly, TypedDict
 
 from litellm.types.llms.base import LiteLLMBaseModel
 
@@ -146,10 +147,11 @@ CACHED_STREAM_EVENTS_KEY: Final = "litellm_cached_anthropic_sse_events"
 class CachedEmbedding(TypedDict):
     """Type definition for cached embedding objects"""
 
-    embedding: ReadOnly[list[float] | str | None]
+    embedding: ReadOnly[Sequence[float] | str | None]
     index: ReadOnly[int | None]
     object: ReadOnly[str | None]
     model: ReadOnly[str | None]
     prompt_tokens: ReadOnly[int | None]
     prompt_tokens_details: ReadOnly[dict | None]
     format_version: ReadOnly[int]
+    provider_specific_fields: NotRequired[ReadOnly[Mapping[str, builtins.object] | None]]
