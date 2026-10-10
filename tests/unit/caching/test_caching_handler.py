@@ -56,6 +56,73 @@ from litellm.caching.caching_handler import _PENDING_CACHE_WRITES
 from litellm.llms.custom_httpx.http_handler import AsyncHTTPHandler, HTTPHandler
 
 
+@pytest.mark.asyncio
+@pytest.mark.parametrize("base64_vectors", [False, True])
+async def test_embedding_provider_fields_survive_warm_and_partial_cache_hits(
+    monkeypatch: pytest.MonkeyPatch, base64_vectors: bool
+) -> None:
+    from openai import AsyncOpenAI
+
+    seen: Final[asyncio.Queue[tuple[str, ...]]] = asyncio.Queue()
+    cache: Final = Cache(type=LiteLLMCacheType.LOCAL)
+    monkeypatch.setattr(litellm, "cache", cache)
+
+    def row(text: str, index: int) -> dict[str, object]:
+        return {
+            "embedding": "AACAPwAAAEA=" if base64_vectors else [float(len(text))],
+            "index": index,
+            "object": "embedding",
+            "sparse_embedding": {"tag": text},
+            "model": "provider-row-model",
+            "prompt_tokens": 999,
+        }
+
+    def respond(request: httpx.Request) -> httpx.Response:
+        inputs: Final = TypeAdapter(tuple[str, ...]).validate_python(json.loads(request.content)["input"])
+        seen.put_nowait(inputs)
+        tokens: Final = sum(len(text) for text in inputs)
+        return httpx.Response(
+            200,
+            json={
+                "model": "cache-test-model",
+                "object": "list",
+                "data": [row(text, index) for index, text in enumerate(inputs)],
+                "usage": {"prompt_tokens": tokens, "total_tokens": tokens},
+            },
+        )
+
+    async with AsyncOpenAI(
+        api_key="sk-test",
+        base_url="http://embedding.example.test/v1",
+        http_client=httpx.AsyncClient(transport=httpx.MockTransport(respond)),
+    ) as client:
+        params: Final = {
+            "model": "openai/cache-test-model",
+            "client": client,
+            "caching": True,
+            "encoding_format": "base64" if base64_vectors else "float",
+        }
+        cold: Final = await aembedding(input=["aa"], **params)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        warm: Final = await aembedding(input=["aa"], **params)
+        assert warm.model_dump()["data"] == cold.model_dump()["data"]
+        assert warm.model == cold.model == "cache-test-model"
+        assert warm.usage.prompt_tokens == cold.usage.prompt_tokens == len("aa")
+
+        mixed_inputs: Final = ["aa", "bbb", "cccc"]
+        mixed: Final = await aembedding(input=mixed_inputs, **params)
+        await asyncio.gather(*_PENDING_CACHE_WRITES)
+        repeated: Final = await aembedding(input=mixed_inputs, **params)
+
+    expected: Final = [row(text, index) for index, text in enumerate(mixed_inputs)]
+    assert mixed.model_dump()["data"] == expected
+    assert repeated.model_dump()["data"] == expected
+    assert mixed.model == repeated.model == "cache-test-model"
+    assert mixed.usage.prompt_tokens == repeated.usage.prompt_tokens == sum(len(text) for text in mixed_inputs)
+    assert seen.qsize() == 2
+    assert (seen.get_nowait(), seen.get_nowait()) == (("aa",), ("bbb", "cccc"))
+
+
 def setup_cache():
     # Set up the cache
     cache = Cache(type=LiteLLMCacheType.LOCAL)

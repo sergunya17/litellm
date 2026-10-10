@@ -4,7 +4,8 @@ import logging
 import re
 import traceback
 import uuid
-from typing import Final
+from types import SimpleNamespace
+from typing import Final, Literal
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
@@ -21,6 +22,36 @@ from litellm.types.caching import EMBEDDING_CACHE_FORMAT_VERSION, LiteLLMCacheTy
 from litellm.types.utils import Embedding, EmbeddingResponse, Usage
 
 _CACHING_TEST_MESSAGES: Final = [{"role": "user", "content": "who is ishaan 5222"}]
+
+@pytest.mark.parametrize("representation", ["mapping", "sdk", "attributes"])
+@pytest.mark.parametrize("base64_vectors", [False, True])
+def test_cached_embedding_keeps_provider_extras_separate_from_bookkeeping(
+    representation: Literal["mapping", "sdk", "attributes"], base64_vectors: bool
+) -> None:
+    vector: Final = "AACAPwAAAEA=" if base64_vectors else [0.1, 0.2]
+    extras: Final = {"sparse_embedding": {"tag": "input"}, "model": "provider-row-model", "prompt_tokens": 999}
+    fields: Final = {"embedding": vector, "index": 0, "object": "embedding", **extras}
+    responses: Final = {
+        "mapping": fields,
+        "sdk": Embedding.model_validate(fields),
+        "attributes": SimpleNamespace(**fields),
+    }
+
+    cached: Final = Cache(type=LiteLLMCacheType.LOCAL)._convert_to_cached_embedding(
+        responses[representation], model="configured-model", prompt_tokens=7
+    )
+
+    assert cached == {
+        "embedding": vector,
+        "index": 0,
+        "object": "embedding",
+        "model": "configured-model",
+        "prompt_tokens": 7,
+        "prompt_tokens_details": None,
+        "format_version": EMBEDDING_CACHE_FORMAT_VERSION,
+        "provider_specific_fields": extras,
+    }
+
 
 messages = [{"role": "user", "content": "who is ishaan 5222"}]
 
