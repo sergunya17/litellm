@@ -1557,6 +1557,10 @@ async def add_model_to_db(
     should_create_model_in_db: bool = True,
     slot: AbstractAsyncContextManager[_ProxyModelTable] | None = None,
 ) -> "_ProxyModelRow | LiteLLM_ProxyModelTable":
+    # Encryption writes defaults back into the model and marks them as explicitly set.
+    unset_litellm_params: Final = (
+        frozenset(type(model_params.litellm_params).model_fields) - model_params.litellm_params.model_fields_set
+    )
     # encrypt litellm params #
     _litellm_params_dict: Final = TypeAdapter(dict[str, object]).validate_python(
         model_params.litellm_params.model_dump(exclude_none=True)
@@ -1574,7 +1578,9 @@ async def add_model_to_db(
     _data: Final[dict] = {
         "model_id": model_params.model_info.id,
         "model_name": model_params.model_name,
-        "litellm_params": model_params.litellm_params.model_dump_json(exclude_none=True),
+        "litellm_params": model_params.litellm_params.model_dump_json(
+            exclude_none=True, exclude=dict.fromkeys(unset_litellm_params, True)
+        ),
         "model_info": model_params.model_info.model_dump_json(exclude_none=True),
         "created_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
         "updated_by": user_api_key_dict.user_id or LITELLM_PROXY_ADMIN_NAME,
