@@ -1400,6 +1400,43 @@ def test_update_in_memory_applies_score_thresholds():
 
 
 @pytest.mark.asyncio
+async def test_shared_presidio_session_does_not_serialize_concurrent_users() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    entered: Final[asyncio.Queue[aiohttp.ClientSession]] = asyncio.Queue()
+    release: Final = asyncio.Event()
+
+    async def use_session() -> None:
+        async with guardrail._get_session_iterator() as session:
+            entered.put_nowait(session)
+            await release.wait()
+
+    users: Final = tuple(asyncio.create_task(use_session()) for _ in range(8))
+    try:
+        await asyncio.sleep(0)
+        assert entered.qsize() == len(users)
+        sessions: Final = tuple(entered.get_nowait() for _ in users)
+        assert all(session is sessions[0] for session in sessions)
+        assert not sessions[0].closed
+    finally:
+        release.set()
+        await asyncio.gather(*users)
+        await guardrail._close_http_session()
+
+
+@pytest.mark.asyncio
+async def test_shared_presidio_session_is_replaced_after_it_closes() -> None:
+    guardrail: Final = OPTIONAL_PresidioPIIMasking(mock_testing=True)
+    try:
+        async with guardrail._get_session_iterator() as first_session:
+            await first_session.close()
+        async with guardrail._get_session_iterator() as replacement:
+            assert replacement is not first_session
+            assert not replacement.closed
+    finally:
+        await guardrail._close_http_session()
+
+
+@pytest.mark.asyncio
 async def test_get_session_iterator_thread_safety(presidio_guardrail):
     """
     Test that _get_session_iterator yields:
