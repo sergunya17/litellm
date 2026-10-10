@@ -42,7 +42,7 @@ import anyio
 import httpx
 import openai
 from openai import AsyncOpenAI
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, RootModel, TypeAdapter, ValidationError
 from typing_extensions import assert_never, overload
 
 import litellm
@@ -11473,12 +11473,13 @@ class Router:
                 mode = db_model_info.get("mode", "chat")
                 input_cost_per_token = _cost_value_as_float(db_model_info.get("input_cost_per_token"))
                 output_cost_per_token = _cost_value_as_float(db_model_info.get("output_cost_per_token"))
+                (declared_limits,) = (RootModel[Mapping[str, object]].model_validate(db_model_info).root,)
 
                 model_info = ModelMapInfo(
                     key=model_group,
                     max_tokens=None,
-                    max_input_tokens=None,
-                    max_output_tokens=None,
+                    max_input_tokens=coerce_token_limit(declared_limits.get("max_input_tokens")),
+                    max_output_tokens=coerce_token_limit(declared_limits.get("max_output_tokens")),
                     input_cost_per_token=input_cost_per_token,
                     output_cost_per_token=output_cost_per_token,
                     litellm_provider=llm_provider,
