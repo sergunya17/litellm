@@ -2206,6 +2206,42 @@ def test_cached_get_model_group_info():
     assert result5 is result6
 
 
+@pytest.mark.parametrize(
+    ("declared", "expected"),
+    [
+        ({"max_input_tokens": 8192, "max_output_tokens": 1024}, (8192, 1024)),
+        ({"max_input_tokens": "8192", "max_output_tokens": "invalid"}, (8192, None)),
+        ({"max_input_tokens": True, "max_output_tokens": "invalid"}, (None, None)),
+        ({}, (None, None)),
+    ],
+)
+def test_model_group_preserves_declared_limits_without_catalog_metadata(
+    monkeypatch: pytest.MonkeyPatch,
+    declared: Mapping[str, object],
+    expected: tuple[int | None, int | None],
+) -> None:
+    deployment_model: Final = "openai/declared-limits-embedder"
+    router: Final = Router(
+        model_list=[
+            {
+                "model_name": "declared-limits",
+                "litellm_params": {"model": deployment_model, "api_key": "test-key"},
+                "model_info": {"mode": "embedding", "input_cost_per_token": 0, **declared},
+            }
+        ]
+    )
+    model_id: Final = router.model_list[0]["model_info"]["id"]
+    for cost_map_key in (model_id, deployment_model, "declared-limits-embedder"):
+        monkeypatch.delitem(litellm.model_cost, cost_map_key, raising=False)
+
+    result: Final = router.get_model_group_info("declared-limits")
+
+    assert result is not None
+    assert (result.max_input_tokens, result.max_output_tokens) == expected
+    assert result.mode == "embedding"
+    assert result.input_cost_per_token == 0
+
+
 def test_model_group_info_cost_from_db_model_info():
     """
     When get_deployment_model_info fails (model_info is None fallback),
